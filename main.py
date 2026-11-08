@@ -3,6 +3,7 @@ import csv
 import time
 from datetime import datetime
 from pathlib import Path
+import requests
 
 import cv2
 import torch
@@ -12,6 +13,7 @@ from ultralytics import YOLO
 # ==========================
 # Configuration
 # ==========================
+API_URL = "http://127.0.0.1:8000/api/incidents"
 
 device = "mps" if torch.backends.mps.is_available() else "cpu"
 
@@ -57,7 +59,7 @@ def in_region(item_box, person_box, top, bottom):
 
 
 def save_event(worker_id, violation):
-    """Save a potential safety violation with a per-worker cooldown."""
+    """Record a possible PPE violation through FastAPI."""
 
     now = time.monotonic()
     alert_key = (worker_id, violation)
@@ -69,30 +71,29 @@ def save_event(worker_id, violation):
     if now - last_alert < ALERT_COOLDOWN:
         return False
 
-    new_file = (
-        not LOG_FILE.exists()
-        or LOG_FILE.stat().st_size == 0
-    )
+    payload = {
+        "worker_id": worker_id,
+        "violation": violation
+    }
 
-    with LOG_FILE.open("a", newline="") as file:
-        writer = csv.writer(file)
+    try:
+        response = requests.post(
+            API_URL,
+            json=payload,
+            timeout=3
+        )
 
-        if new_file:
-            writer.writerow([
-                "timestamp",
-                "worker_id",
-                "violation"
-            ])
+        response.raise_for_status()
 
-        writer.writerow([
-            datetime.now().isoformat(timespec="seconds"),
-            worker_id,
-            violation
-        ])
+    except requests.RequestException as error:
+        print(f"Failed to save incident: {error}")
+        return False
 
     last_alert_times[alert_key] = now
 
-    print(f"ALERT: Worker #{worker_id} - {violation}")
+    print(
+        f"ALERT: Worker #{worker_id} - {violation}"
+    )
 
     return True
 

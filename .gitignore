@@ -4,3 +4,10 @@ __pycache__/
 .DS_Store
 runs/
 *.pt
+
+.env
+__pycache__/
+*.pyc
+runs/
+*.pt
+events.csv
