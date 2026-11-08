@@ -1,8 +1,12 @@
 
+import logging
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
+from backend.dashboard import router as dashboard_router
 from sqlmodel import Session, select
 
 from backend.database import (
@@ -25,7 +29,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SafeTruck AI API",
     description="Workplace safety incident monitoring API",
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan
 )
 
@@ -95,3 +99,16 @@ def get_incident(
         )
 
     return incident
+
+
+# Additive Phase 5 routes; existing detector creation and list APIs are preserved.
+app.include_router(dashboard_router)
+
+
+@app.exception_handler(SQLAlchemyError)
+async def database_error_handler(request: Request, error: SQLAlchemyError):
+    # Never return SQL statements, connection strings, or credentials to clients.
+    logging.getLogger(__name__).error("Database request failed (%s)", type(error).__name__)
+    return JSONResponse(status_code=503, content={
+        "detail": "Incident storage is temporarily unavailable. Please try again."
+    })
