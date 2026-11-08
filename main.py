@@ -1,64 +1,331 @@
 
+import csv
 import time
+from datetime import datetime
+from pathlib import Path
+
 import cv2
 import torch
 from ultralytics import YOLO
 
-# Select Apple GPU if available
+
+# ==========================
+# Configuration
+# ==========================
+
 device = "mps" if torch.backends.mps.is_available() else "cpu"
 
-print("Using device:", device, flush=True)
+# General YOLO model for tracking workers
+person_model = YOLO("yolo26n.pt")
 
-# Load the trained model
-model = YOLO("models/best.pt")
+# Custom-trained model for PPE detection
+ppe_model = YOLO("models/best.pt")
 
-# Open webcam
+ALERT_FRAMES = 8
+ALERT_COOLDOWN = 30
+MAX_MISSED_FRAMES = 10
+WORKER_TIMEOUT = 10
+
+LOG_FILE = Path("events.csv")
+
+# Store worker detection history
+worker_states = {}
+
+# Store last alert time per worker and violation
+last_alert_times = {}
+
+
+# ==========================
+# Helper Functions
+# ==========================
+
+def in_region(item_box, person_box, top, bottom):
+    """Check if an object's center is inside a worker's body region."""
+
+    x1, y1, x2, y2 = person_box
+    a, b, c, d = item_box
+
+    center_x = (a + c) / 2
+    center_y = (b + d) / 2
+
+    height = y2 - y1
+
+    return (
+        x1 <= center_x <= x2
+        and y1 + height * top <= center_y <= y1 + height * bottom
+    )
+
+
+def save_event(worker_id, violation):
+    """Save a potential safety violation with a per-worker cooldown."""
+
+    now = time.monotonic()
+    alert_key = (worker_id, violation)
+
+    last_alert = last_alert_times.get(
+        alert_key, float("-inf")
+    )
+
+    if now - last_alert < ALERT_COOLDOWN:
+        return False
+
+    new_file = (
+        not LOG_FILE.exists()
+        or LOG_FILE.stat().st_size == 0
+    )
+
+    with LOG_FILE.open("a", newline="") as file:
+        writer = csv.writer(file)
+
+        if new_file:
+            writer.writerow([
+                "timestamp",
+                "worker_id",
+                "violation"
+            ])
+
+        writer.writerow([
+            datetime.now().isoformat(timespec="seconds"),
+            worker_id,
+            violation
+        ])
+
+    last_alert_times[alert_key] = now
+
+    print(f"ALERT: Worker #{worker_id} - {violation}")
+
+    return True
+
+
+def update_violation(state, missing, present, detected):
+    """Update missing-equipment evidence across frames."""
+
+    if missing in detected and present not in detected:
+
+        state["missed"][missing] = 0
+        state[missing] += 1
+
+    elif present in detected:
+
+        state["missed"][missing] = 0
+        state[missing] = 0
+        state["alerted"].discard(missing)
+
+    else:
+
+        state["missed"][missing] += 1
+
+        if state["missed"][missing] >= MAX_MISSED_FRAMES:
+            state[missing] = 0
+            state["alerted"].discard(missing)
+
+
+# ==========================
+# Webcam Setup
+# ==========================
+
 cap = cv2.VideoCapture(0)
+
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
 if not cap.isOpened():
     raise RuntimeError("Cannot open webcam")
 
-# Reduce camera resolution
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+print(f"SafeTruck AI running on {device}")
 
-print("Camera opened successfully", flush=True)
+
+# ==========================
+# Main Detection Loop
+# ==========================
 
 try:
     while True:
+
         success, frame = cap.read()
 
         if not success:
-            print("Failed to read camera frame")
             break
 
         frame = cv2.flip(frame, 1)
 
-        start_time = time.perf_counter()
-
-        # Run YOLO inference
-        results = model.predict(
+        # STEP 1: Detect and track people only
+        person_result = person_model.track(
             source=frame,
+            persist=True,
+            tracker="custom_tracker.yaml",
+            classes=[0],
             imgsz=320,
-            conf=0.15,
+            conf=0.25,
             device=device,
             verbose=False
-        )
+        )[0]
 
-        elapsed = time.perf_counter() - start_time
+        # STEP 2: Detect protective equipment separately
+        ppe_result = ppe_model.predict(
+            source=frame,
+            imgsz=320,
+            conf=0.20,
+            device=device,
+            verbose=False
+        )[0]
 
-        print(
-            f"Inference time: {elapsed:.2f}s | "
-            f"Detections: {len(results[0].boxes)}",
-            flush=True
-        )
+        people = []
+        equipment = []
 
-        # Draw results
-        annotated_frame = results[0].plot()
+        # STEP 3: Collect tracked workers
+        for box in person_result.boxes:
 
+            if box.id is None:
+                continue
+
+            coords = list(map(
+                int,
+                box.xyxy[0].tolist()
+            ))
+
+            people.append({
+                "id": int(box.id[0]),
+                "box": coords
+            })
+
+        # STEP 4: Collect PPE detections
+        for box in ppe_result.boxes:
+
+            name = ppe_model.names[int(box.cls[0])]
+
+            if name not in (
+                "helmet",
+                "vest",
+                "no_helmet",
+                "no_vest"
+            ):
+                continue
+
+            coords = list(map(
+                int,
+                box.xyxy[0].tolist()
+            ))
+
+            equipment.append({
+                "name": name,
+                "box": coords
+            })
+
+        # STEP 5: Analyze each tracked worker
+        for person in people:
+
+            worker_id = person["id"]
+            person_box = person["box"]
+
+            state = worker_states.setdefault(
+                worker_id,
+                {
+                    "no_helmet": 0,
+                    "no_vest": 0,
+                    "missed": {
+                        "no_helmet": 0,
+                        "no_vest": 0
+                    },
+                    "alerted": set(),
+                    "last_seen": time.monotonic()
+                }
+            )
+
+            state["last_seen"] = time.monotonic()
+
+            detected = set()
+
+            # Match PPE detections to worker body regions
+            for item in equipment:
+
+                if item["name"] in (
+                    "helmet",
+                    "no_helmet"
+                ):
+                    top, bottom = 0.0, 0.35
+
+                else:
+                    top, bottom = 0.25, 0.80
+
+                if in_region(
+                    item["box"],
+                    person_box,
+                    top,
+                    bottom
+                ):
+                    detected.add(item["name"])
+
+            # STEP 6: Check possible PPE violations
+            for missing, present in [
+                ("no_helmet", "helmet"),
+                ("no_vest", "vest")
+            ]:
+
+                update_violation(
+                    state,
+                    missing,
+                    present,
+                    detected
+                )
+
+                if (
+                    state[missing] >= ALERT_FRAMES
+                    and missing not in state["alerted"]
+                ):
+
+                    if save_event(worker_id, missing):
+                        state["alerted"].add(missing)
+
+            # STEP 7: Display worker tracking status
+            has_alert = bool(state["alerted"])
+
+            color = (
+                (0, 0, 255)
+                if has_alert
+                else (0, 255, 255)
+            )
+
+            x1, y1, x2, y2 = person_box
+
+            cv2.rectangle(
+                frame,
+                (x1, y1),
+                (x2, y2),
+                color,
+                2
+            )
+
+            label = f"Worker #{worker_id}"
+
+            if has_alert:
+                label += " - REVIEW PPE"
+
+            cv2.putText(
+                frame,
+                label,
+                (x1, max(y1 - 10, 20)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                color,
+                2
+            )
+
+        # STEP 8: Remove inactive worker states
+        now = time.monotonic()
+
+        for worker_id in list(worker_states):
+
+            if (
+                now - worker_states[worker_id]["last_seen"]
+                > WORKER_TIMEOUT
+            ):
+                del worker_states[worker_id]
+
+        # STEP 9: Display webcam
         cv2.imshow(
-            "SafeTruck AI - PPE Detection",
-            annotated_frame
+            "SafeTruck AI - Safety Monitoring",
+            frame
         )
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
