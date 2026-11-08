@@ -1,3 +1,5 @@
 -r requirements-backend.txt
 pytest>=8,<10
 httpx>=0.28,<1
+
+requests>=2.32,<3

@@ -1,34 +1,18 @@
 
-import csv
+import os
 import time
-from datetime import datetime
-from pathlib import Path
 import requests
-
-import cv2
-import torch
-from ultralytics import YOLO
 
 
 # ==========================
 # Configuration
 # ==========================
-API_URL = "http://127.0.0.1:8000/api/incidents"
-
-device = "mps" if torch.backends.mps.is_available() else "cpu"
-
-# General YOLO model for tracking workers
-person_model = YOLO("yolo26n.pt")
-
-# Custom-trained model for PPE detection
-ppe_model = YOLO("models/best.pt")
+API_URL = os.getenv("SAFETRUCK_API_URL", "http://127.0.0.1:8000/api/incidents")
 
 ALERT_FRAMES = 8
 ALERT_COOLDOWN = 30
 MAX_MISSED_FRAMES = 10
 WORKER_TIMEOUT = 10
-
-LOG_FILE = Path("events.csv")
 
 # Store worker detection history
 worker_states = {}
@@ -121,217 +105,235 @@ def update_violation(state, missing, present, detected):
             state["alerted"].discard(missing)
 
 
-# ==========================
-# Webcam Setup
-# ==========================
+def run():
+    """Run the unchanged two-model camera pipeline; imports stay safe for tests."""
+    import cv2
+    import torch
+    from ultralytics import YOLO
 
-cap = cv2.VideoCapture(0)
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
 
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    # General YOLO model for tracking workers
+    person_model = YOLO("yolo26n.pt")
 
-if not cap.isOpened():
-    raise RuntimeError("Cannot open webcam")
+    # Custom-trained model for PPE detection
+    ppe_model = YOLO("models/best.pt")
 
-print(f"SafeTruck AI running on {device}")
+    # ==========================
+    # Webcam Setup
+    # ==========================
 
+    cap = cv2.VideoCapture(0)
 
-# ==========================
-# Main Detection Loop
-# ==========================
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-try:
-    while True:
+    if not cap.isOpened():
+        cap.release()
+        raise RuntimeError("Cannot open webcam")
 
-        success, frame = cap.read()
+    print(f"SafeTruck AI running on {device}")
 
-        if not success:
-            break
+    # ==========================
+    # Main Detection Loop
+    # ==========================
 
-        frame = cv2.flip(frame, 1)
+    try:
+        while True:
 
-        # STEP 1: Detect and track people only
-        person_result = person_model.track(
-            source=frame,
-            persist=True,
-            tracker="custom_tracker.yaml",
-            classes=[0],
-            imgsz=320,
-            conf=0.25,
-            device=device,
-            verbose=False
-        )[0]
+            success, frame = cap.read()
 
-        # STEP 2: Detect protective equipment separately
-        ppe_result = ppe_model.predict(
-            source=frame,
-            imgsz=320,
-            conf=0.20,
-            device=device,
-            verbose=False
-        )[0]
+            if not success:
+                break
 
-        people = []
-        equipment = []
+            frame = cv2.flip(frame, 1)
 
-        # STEP 3: Collect tracked workers
-        for box in person_result.boxes:
+            # STEP 1: Detect and track people only
+            person_result = person_model.track(
+                source=frame,
+                persist=True,
+                tracker="custom_tracker.yaml",
+                classes=[0],
+                imgsz=320,
+                conf=0.25,
+                device=device,
+                verbose=False
+            )[0]
 
-            if box.id is None:
-                continue
+            # STEP 2: Detect protective equipment separately
+            ppe_result = ppe_model.predict(
+                source=frame,
+                imgsz=320,
+                conf=0.20,
+                device=device,
+                verbose=False
+            )[0]
 
-            coords = list(map(
-                int,
-                box.xyxy[0].tolist()
-            ))
+            people = []
+            equipment = []
 
-            people.append({
-                "id": int(box.id[0]),
-                "box": coords
-            })
+            # STEP 3: Collect tracked workers
+            for box in person_result.boxes:
 
-        # STEP 4: Collect PPE detections
-        for box in ppe_result.boxes:
+                if box.id is None:
+                    continue
 
-            name = ppe_model.names[int(box.cls[0])]
+                coords = list(map(
+                    int,
+                    box.xyxy[0].tolist()
+                ))
 
-            if name not in (
-                "helmet",
-                "vest",
-                "no_helmet",
-                "no_vest"
-            ):
-                continue
+                people.append({
+                    "id": int(box.id[0]),
+                    "box": coords
+                })
 
-            coords = list(map(
-                int,
-                box.xyxy[0].tolist()
-            ))
+            # STEP 4: Collect PPE detections
+            for box in ppe_result.boxes:
 
-            equipment.append({
-                "name": name,
-                "box": coords
-            })
+                name = ppe_model.names[int(box.cls[0])]
 
-        # STEP 5: Analyze each tracked worker
-        for person in people:
-
-            worker_id = person["id"]
-            person_box = person["box"]
-
-            state = worker_states.setdefault(
-                worker_id,
-                {
-                    "no_helmet": 0,
-                    "no_vest": 0,
-                    "missed": {
-                        "no_helmet": 0,
-                        "no_vest": 0
-                    },
-                    "alerted": set(),
-                    "last_seen": time.monotonic()
-                }
-            )
-
-            state["last_seen"] = time.monotonic()
-
-            detected = set()
-
-            # Match PPE detections to worker body regions
-            for item in equipment:
-
-                if item["name"] in (
+                if name not in (
                     "helmet",
-                    "no_helmet"
+                    "vest",
+                    "no_helmet",
+                    "no_vest"
                 ):
-                    top, bottom = 0.0, 0.35
+                    continue
 
-                else:
-                    top, bottom = 0.25, 0.80
+                coords = list(map(
+                    int,
+                    box.xyxy[0].tolist()
+                ))
 
-                if in_region(
-                    item["box"],
-                    person_box,
-                    top,
-                    bottom
-                ):
-                    detected.add(item["name"])
+                equipment.append({
+                    "name": name,
+                    "box": coords
+                })
 
-            # STEP 6: Check possible PPE violations
-            for missing, present in [
-                ("no_helmet", "helmet"),
-                ("no_vest", "vest")
-            ]:
+            # STEP 5: Analyze each tracked worker
+            for person in people:
 
-                update_violation(
-                    state,
-                    missing,
-                    present,
-                    detected
+                worker_id = person["id"]
+                person_box = person["box"]
+
+                state = worker_states.setdefault(
+                    worker_id,
+                    {
+                        "no_helmet": 0,
+                        "no_vest": 0,
+                        "missed": {
+                            "no_helmet": 0,
+                            "no_vest": 0
+                        },
+                        "alerted": set(),
+                        "last_seen": time.monotonic()
+                    }
                 )
 
+                state["last_seen"] = time.monotonic()
+
+                detected = set()
+
+                # Match PPE detections to worker body regions
+                for item in equipment:
+
+                    if item["name"] in (
+                        "helmet",
+                        "no_helmet"
+                    ):
+                        top, bottom = 0.0, 0.35
+
+                    else:
+                        top, bottom = 0.25, 0.80
+
+                    if in_region(
+                        item["box"],
+                        person_box,
+                        top,
+                        bottom
+                    ):
+                        detected.add(item["name"])
+
+                # STEP 6: Check possible PPE violations
+                for missing, present in [
+                    ("no_helmet", "helmet"),
+                    ("no_vest", "vest")
+                ]:
+
+                    update_violation(
+                        state,
+                        missing,
+                        present,
+                        detected
+                    )
+
+                    if (
+                        state[missing] >= ALERT_FRAMES
+                        and missing not in state["alerted"]
+                    ):
+
+                        if save_event(worker_id, missing):
+                            state["alerted"].add(missing)
+
+                # STEP 7: Display worker tracking status
+                has_alert = bool(state["alerted"])
+
+                color = (
+                    (0, 0, 255)
+                    if has_alert
+                    else (0, 255, 255)
+                )
+
+                x1, y1, x2, y2 = person_box
+
+                cv2.rectangle(
+                    frame,
+                    (x1, y1),
+                    (x2, y2),
+                    color,
+                    2
+                )
+
+                label = f"Worker #{worker_id}"
+
+                if has_alert:
+                    label += " - REVIEW PPE"
+
+                cv2.putText(
+                    frame,
+                    label,
+                    (x1, max(y1 - 10, 20)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    color,
+                    2
+                )
+
+            # STEP 8: Remove inactive worker states
+            now = time.monotonic()
+
+            for worker_id in list(worker_states):
+
                 if (
-                    state[missing] >= ALERT_FRAMES
-                    and missing not in state["alerted"]
+                    now - worker_states[worker_id]["last_seen"]
+                    > WORKER_TIMEOUT
                 ):
+                    del worker_states[worker_id]
 
-                    if save_event(worker_id, missing):
-                        state["alerted"].add(missing)
-
-            # STEP 7: Display worker tracking status
-            has_alert = bool(state["alerted"])
-
-            color = (
-                (0, 0, 255)
-                if has_alert
-                else (0, 255, 255)
+            # STEP 9: Display webcam
+            cv2.imshow(
+                "SafeTruck AI - Safety Monitoring",
+                frame
             )
 
-            x1, y1, x2, y2 = person_box
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
 
-            cv2.rectangle(
-                frame,
-                (x1, y1),
-                (x2, y2),
-                color,
-                2
-            )
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
 
-            label = f"Worker #{worker_id}"
 
-            if has_alert:
-                label += " - REVIEW PPE"
-
-            cv2.putText(
-                frame,
-                label,
-                (x1, max(y1 - 10, 20)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                color,
-                2
-            )
-
-        # STEP 8: Remove inactive worker states
-        now = time.monotonic()
-
-        for worker_id in list(worker_states):
-
-            if (
-                now - worker_states[worker_id]["last_seen"]
-                > WORKER_TIMEOUT
-            ):
-                del worker_states[worker_id]
-
-        # STEP 9: Display webcam
-        cv2.imshow(
-            "SafeTruck AI - Safety Monitoring",
-            frame
-        )
-
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
-
-finally:
-    cap.release()
-    cv2.destroyAllWindows()
+if __name__ == "__main__":
+    run()

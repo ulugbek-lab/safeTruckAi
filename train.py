@@ -18,4 +18,3 @@ model.train(
     project="safeTruckAi",
     name="ppe"
 )
-

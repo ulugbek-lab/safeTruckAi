@@ -1,142 +1,196 @@
 # SafeTruck AI
 
-A local workplace safety monitoring system that detects potential missing helmets and safety vests, tracks workers, stores incidents in PostgreSQL, and provides a React dashboard for incident review. AI detections are potential violations that require human assessment.
+**A computer vision and full-stack portfolio project for reviewing potential workplace PPE violations.**
 
-## Current features
+Construction and industrial safety teams need a practical way to notice missing protective equipment and review detections over time. SafeTruck AI combines local webcam inference, temporary worker tracking, persistent incident records, and a monitoring dashboard. It flags potential missing helmets and safety vests for human review; it does not identify workers or establish that a safety violation occurred.
 
-- Separate YOLO person tracking (ByteTrack) and custom PPE detection with worker-to-PPE association.
-- Multi-frame violation confirmation, alert cooldowns, and Apple Silicon MPS inference where available.
-- FastAPI incident creation and retrieval backed by PostgreSQL in Docker.
-- Responsive dashboard with all-time statistics, 14-day incident activity, and violation distribution.
-- Server-side history filters, deterministic timestamp sorting, pagination, and incident details.
-- Pending, reviewed, and dismissed review states persisted through a validated PATCH endpoint.
-- Automatic refresh 8 seconds after each completed fetch, manual refresh, last successful update time, loading, empty, and failure states. Requests time out after 15 seconds; polling never overlaps and is cancelled on unmount or filter changes.
+![SafeTruck AI dashboard with existing incident records](docs/assets/dashboard.png)
 
-## Technology and architecture
+*Actual application screenshot. The displayed records predate Phase 6 verification; no synthetic records were added to the configured incident database.*
 
-Python, Ultralytics YOLO, OpenCV, PyTorch/MPS, ByteTrack, FastAPI, SQLModel/SQLAlchemy, PostgreSQL 17, React 19, TypeScript, Vite, Tailwind CSS 4, Lucide React, and Recharts.
+[Demo guide](docs/demo-guide.md) · [Model evaluation](docs/model-evaluation.md) · [Final validation report](docs/final-validation.md) · [Portfolio description](docs/portfolio.md)
 
-```text
-Webcam → main.py (tracking + PPE) → POST /api/incidents → FastAPI → PostgreSQL
-React dashboard → Vite /api proxy → FastAPI queries / aggregates / review updates
+## What it does
+
+- Tracks people with a general YOLO model and ByteTrack while running a separate fine-tuned PPE model.
+- Associates helmet/vest evidence with a tracked worker's head and torso regions.
+- Confirms missing-PPE evidence over multiple frames, suppresses duplicate alerts, and submits incidents to FastAPI.
+- Stores incident type, temporary tracking ID, UTC timestamp, and review status in PostgreSQL.
+- Displays all-time statistics, a 14-day UTC trend, violation distribution, and paginated incident history.
+- Supports type/status filters, timestamp sorting, incident details, and pending/reviewed/dismissed review updates.
+- Refreshes dashboard data automatically, with manual refresh and explicit loading, empty, timeout, and failure states.
+
+![Actual incident history](docs/assets/incident-history.png)
+
+## Stack
+
+| Layer | Technologies |
+| --- | --- |
+| Vision | Python, Ultralytics YOLO26n, PyTorch, OpenCV, ByteTrack |
+| API and persistence | FastAPI, Pydantic, SQLModel/SQLAlchemy, PostgreSQL 17 |
+| Dashboard | React 19, TypeScript, Vite 6, Tailwind CSS 4, Lucide, Recharts |
+| Local development | Docker Compose, pytest, npm lockfile |
+
+The existing ML environment uses Python 3.11.18, Ultralytics 8.4.204, PyTorch 2.15.0, and OpenCV 4.14.0.94. Phase 6 also verified backend tests with Python 3.13 and the frontend with Node 22.23.1. Apple Silicon uses MPS when available; CPU is the fallback.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Camera[Local webcam / OpenCV] --> Tracking[General YOLO + ByteTrack]
+    Camera --> PPE[Fine-tuned YOLO PPE model]
+    Tracking --> Association[Worker-to-PPE region association]
+    PPE --> Association
+    Association --> State[Frame evidence + cooldown state]
+    State -->|POST incident| API[FastAPI]
+    API <--> DB[(PostgreSQL)]
+    Dashboard[React dashboard] -->|Queries and review updates via Vite proxy| API
 ```
 
-```text
-backend/
-  database.py           Existing database configuration and session dependency
-  models.py             Existing table plus API response and dashboard schemas
-  main.py               Existing routes, dashboard router, safe storage error response
-  dashboard.py          Filtered pagination, aggregates, review updates
-frontend/
-  src/components/       Cards, charts, incident table, detail/review dialog, status badge
-  src/hooks/            Polling, cancellation, timeout, and refresh state
-  src/layouts/          Responsive navigation and app shell
-  src/pages/            Dashboard composition and filters
-  src/services/         Typed API client
-  src/types/            Incident and dashboard contracts
-  .env.example          Public API/proxy configuration only
-requirements-backend.txt
-requirements-dev.txt
-tests/test_dashboard.py
-docs/openapi.json       Generated FastAPI contract, including existing routes
-```
+The dashboard receives incident records through HTTP, not camera frames. Database credentials remain in the backend environment. No video recording, streaming, evidence capture, or permanent worker identification is implemented.
 
-## Local setup
+### Inference and incident flow
 
-Use Python 3.10+ (3.11 or 3.12 is recommended for the ML environment), Node.js 20.19+ or 22.12+, npm, and Docker Desktop. Backend/dashboard checks were run with Python 3.13 and Node 22; the ML pipeline was not reinstalled or rerun for Phase 5.
+1. OpenCV reads webcam 0 at a requested 640 × 480 resolution and flips each frame horizontally.
+2. `yolo26n.pt` tracks only the person class at `imgsz=320`, `conf=0.25`, using `custom_tracker.yaml` and persistent ByteTrack state.
+3. `models/best.pt` performs PPE inference at `imgsz=320`, `conf=0.20`. The checkpoint contains 12 classes; this application uses `helmet`, `vest`, `no_helmet`, and `no_vest`.
+4. Equipment box centers are associated with the upper 35% of a person box for helmet evidence, or 25–80% for vest evidence.
+5. Eight missing-PPE observations confirm an alert. They need not be strictly consecutive: up to nine unknown observations are tolerated, and ten reset the evidence. Detected compliant PPE resets the counter and takes priority over a simultaneous missing-PPE label.
+6. A successful API submission latches the alert until evidence resets. A separate 30-second cooldown is keyed by tracking ID and violation type. Failed submissions do not consume the cooldown; there is no durable offline queue.
+7. Worker state expires after ten seconds without seeing that tracking ID. The API assigns the persisted UTC timestamp and returns the stored record.
 
-From the repository root:
+This architecture keeps general person tracking separate from the custom detector's PPE labels. All temporal state is process-local; restarting the detector resets it.
+
+## Run locally
+
+### Prerequisites and environment
+
+Use Python 3.11 or 3.12 for a fresh ML environment, Node.js 20.19+ or 22.12+, npm, and Docker Desktop. An existing working ML environment can be reused—for example, `conda activate safeTruckAi` on the development machine. Do not replace a working environment or existing `.env` unnecessarily.
+
+For a fresh checkout:
 
 ```bash
-cd ~/Desktop/safeTruckAi
-python3 -m venv .venv
+cd /path/to/safeTruckAi
+python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements-backend.txt
+python -m pip install -r requirements.txt -r requirements-backend.txt
+cp .env.example .env  # New installation only; keep an existing .env
 ```
 
-Keep your existing `.env` and Docker volume. For a new installation only, copy `.env.example` to `.env` and choose your local credentials before starting PostgreSQL. The existing compose file publishes PostgreSQL at `127.0.0.1:5433`. Never replace credentials for an already initialized volume without intentionally updating the database role too. Do not run `docker compose down -v` on a database you want to retain.
+Set local PostgreSQL credentials in `.env`, keeping `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, and `DATABASE_URL` consistent. URL-encode special characters in connection credentials. The supplied database driver is `postgresql+psycopg`. Changing environment values does not change a role/password in an already initialized Docker volume.
 
-Start PostgreSQL:
+Place your existing `models/best.pt` and `yolo26n.pt` in their current locations. Weights and datasets are intentionally not committed. A fresh clone therefore needs the trained checkpoint separately; the backend and dashboard can run without the ML weights. This repository does not automatically download or retrain the custom model.
+
+### Start the database
 
 ```bash
 docker compose up -d postgres
 ```
 
-Start FastAPI in a second terminal, from the repository root:
+PostgreSQL is published on `127.0.0.1:5433` and uses a named volume. Do not remove the volume when retaining incident history. Tables are created if absent; no Phase 6 database migration is required.
+
+### Start FastAPI
+
+From the repository root, in the selected Python environment:
 
 ```bash
-source .venv/bin/activate
 uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-API documentation: <http://127.0.0.1:8000/docs>. The existing startup creates missing tables; Phase 5 requires no migration or column changes. The timestamp mapping explicitly retains the existing `timestamp with time zone` storage type across SQLModel versions.
+[API documentation](http://127.0.0.1:8000/docs) · [Liveness](http://127.0.0.1:8000/health)
 
-Start React in another terminal:
+### Start the dashboard
+
+In another terminal:
 
 ```bash
-cd ~/Desktop/safeTruckAi/frontend
+cd /path/to/safeTruckAi/frontend
 npm ci
 npm run dev
 ```
 
-Open <http://127.0.0.1:5173>. Vite proxies `/api` to `http://127.0.0.1:8000`; no CORS configuration is needed for this setup. Optional `frontend/.env.local` values are documented in `frontend/.env.example`. `API_PROXY_TARGET` stays in Vite's server process; `VITE_API_BASE_URL` is public browser configuration. Never use a `VITE_` variable for credentials. A separately hosted frontend must use a same-origin reverse proxy or explicitly configured backend CORS; Vite's development proxy is not a production server.
+Open [localhost:5173](http://127.0.0.1:5173). The Vite proxy sends `/api` requests to port 8000. To change the proxy target, set `API_PROXY_TARGET` in `frontend/.env.local`. Optional `VITE_API_BASE_URL` sets a public browser API base; leave it blank for the same-origin proxy. Never put secrets in a `VITE_` variable; these values are included in browser code.
 
-Start the existing AI detector from the repository root in its working ML environment:
+### Start webcam detection
+
+In the ML environment, from the repository root:
 
 ```bash
-python -m pip install -r requirements.txt
 python main.py
 ```
 
-Keep `models/best.pt`, `yolo26n.pt`, and `custom_tracker.yaml` in their current locations. The detector requires OpenCV camera access and posts to port 8000. Press `q` in its OpenCV window to stop. Root ML requirements retain their existing packages and add the `requests` dependency imported by the detector; Ultralytics supplies PyTorch. Training remains unchanged and requires the external `construction-ppe.yaml` dataset configuration.
+Grant camera access to the application hosting Python when macOS requests it. Press `q` in the OpenCV window to stop. `SAFETRUCK_API_URL` can override the incident destination for an isolated demo; its default is `http://127.0.0.1:8000/api/incidents`.
 
-## API contract
+The Phase 6 execution host could not obtain camera authorization. Real model inference and tracking were verified on local dataset images, and the submission-to-dashboard path was verified separately. A physical webcam-to-incident run remains a manual acceptance step; see the [demo guide](docs/demo-guide.md).
 
-| Method | Endpoint                           | Behavior                                                                                                              |
-| ------ | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| GET    | `/health`                          | Process liveness; does not assert camera or database health                                                           |
-| POST   | `/api/incidents`                   | Existing detector contract: `{ "worker_id": 8, "violation": "no_helmet" }`; returns 201                               |
-| GET    | `/api/incidents?limit=50`          | Preserved legacy array, newest ID first, limit 1–100                                                                  |
-| GET    | `/api/incidents/{id}`              | Actual stored incident, or 404                                                                                        |
-| PATCH  | `/api/incidents/{id}`              | `{ "status": "pending" \| "reviewed" \| "dismissed" }`; updated record or 404                                         |
-| GET    | `/api/dashboard/incidents`         | `{ items, total, offset, limit }`; optional `violation`, `status`, `sort=newest\|oldest`, `offset>=0`, `limit=1..100` |
-| GET    | `/api/dashboard/statistics`        | `{ total, pending, no_helmet, no_vest }` across all stored incidents                                                  |
-| GET    | `/api/dashboard/analytics?days=14` | UTC daily counts for 1–90 inclusive calendar days ending today, including zero days; all-time violation distribution  |
+## Model results
 
-Invalid inputs return FastAPI 422 validation errors. Missing incidents return 404. Database failures during requests return 503 with a generic `detail` message; credentials and SQL are not exposed. Statistics and distribution include dismissed records and do not follow table filters. Chart headings explicitly state their time windows. Each API response represents its own query snapshot, so incoming detections may cause small differences between simultaneously refreshed widgets.
+The checkpoint was trained for ten epochs at 416 pixels, batch 2, using MPS. Fresh CPU validation used the existing Construction-PPE validation split: **200 images, 2,961 objects, 12 classes**. No retraining was performed.
 
-The inspected PostgreSQL database uses timezone-aware timestamps. The model explicitly retains that type, and incident responses normalize timestamps to an explicit UTC offset. The UI shows incident times in the browser's local zone and labels that zone; daily chart buckets remain UTC. The response serializer also accepts naive UTC values from SQLite tests or older installations; no timestamp migration is performed.
+| Evaluation | Precision | Recall | mAP50 | mAP50–95 |
+| --- | ---: | ---: | ---: | ---: |
+| Saved checkpoint metrics | 0.7835 | 0.5151 | 0.5692 | 0.3697 |
+| Fresh validation, 416 pixels | 0.7846 | 0.5151 | 0.5689 | 0.3700 |
+| Fresh validation, runtime 320 pixels | 0.7448 | 0.4478 | 0.4929 | 0.3051 |
 
-## Validation
+These aggregates cover all 12 classes. At 320 pixels, `no_helmet` recall is **0.3509** and `no_vest` recall is **0.4692**. Missing-PPE detection is a significant limitation. These are object-detection validation metrics, not end-to-end incident accuracy, tracking quality, or field safety certification. Per-class results, provenance, and reproducible commands are in [model evaluation](docs/model-evaluation.md).
+
+## API
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| GET | `/health` | Process liveness; not camera/database health |
+| POST | `/api/incidents` | Create `{ "worker_id": 8, "violation": "no_helmet" }`; 201 response |
+| GET | `/api/incidents?limit=50` | Preserved legacy incident array; limit 1–100, newest ID first |
+| GET | `/api/incidents/{id}` | Stored details; 404 if absent |
+| PATCH | `/api/incidents/{id}` | Set `status` to `pending`, `reviewed`, or `dismissed` |
+| GET | `/api/dashboard/incidents` | Paginated items/total/offset/limit; type/status filters and newest/oldest timestamp order |
+| GET | `/api/dashboard/statistics` | All-time total, pending, missing-helmet, and missing-vest counts |
+| GET | `/api/dashboard/analytics?days=14` | UTC daily buckets for 1–90 days and all-time violation distribution |
+
+Invalid inputs return 422; missing records return 404; request-time database failures return a generic 503 without exposing SQL or connection credentials. The [OpenAPI contract](docs/openapi.json) describes the schemas.
+
+All-time statistics and distribution include dismissed records and do not follow table filters. Daily charts use UTC; incident timestamps display in the browser's labeled local timezone. Each widget is a separate query snapshot, so new writes may briefly cause differences between widgets. Reviews use last-write-wins updates with no attribution or audit history.
+
+## Tests and reproducibility
 
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m pytest -q
+python scripts/verify_postgres.py
 cd frontend
 npm run typecheck
 npm run build
-npm run preview
 ```
 
-The default pytest suite uses disposable in-memory SQLite and overrides the database dependency, so it never writes to your incident database. It verifies totals beyond a page, filters, stable ordering, pagination, UTC boundaries/zero days, review persistence, input rejection, legacy API compatibility, missing records, and safe storage errors. The same suite can run with `TEST_DATABASE_URL` pointing to a **disposable** PostgreSQL database whose name includes `_phase5_test_`. The fixture creates and drops tables there. Never point it at your real database.
+Default tests use in-memory SQLite and controlled detector inputs. They do not open a camera or load ML models. The PostgreSQL helper creates a disposable database, runs the same suite, reads the configured database, verifies its rows are unchanged, and removes only the temporary database. It requires a local role with `CREATEDB`; stop other writers during this preservation check. The temporary name retains the `_phase5_test_` safety guard expected by the existing fixture. Never point a destructive test fixture at your incident database.
 
-The generated API contract can be refreshed with:
+Phase 6: **20 tests passed on SQLite and 20 on PostgreSQL**, TypeScript and production build passed, and browser review/filter/pagination checks passed using isolated synthetic records. The physical webcam check was blocked by host permissions. A later local `.env` edit caused an authentication failure, recorded separately from the passing tests. Full evidence and limits are in [final validation](docs/final-validation.md).
 
-```bash
-python -c 'import json; from backend.main import app; from pathlib import Path; Path("docs/openapi.json").write_text(json.dumps(app.openapi(), indent=2) + "\n")'
+## Project layout
+
+```text
+main.py                       Webcam pipeline, frame evidence, HTTP incident submission
+train.py                      Existing ten-epoch training entry point
+custom_tracker.yaml           ByteTrack configuration
+backend/                      FastAPI routes, validated schemas, SQLModel persistence
+frontend/src/                 React components, typed API client, polling hook, dashboard
+scripts/evaluate_model.py     Local validation with no retraining or downloads
+scripts/verify_postgres.py    Disposable PostgreSQL regression/demo session
+tests/                        Backend contract and controlled detector regression tests
+docs/                         Evaluation, validation, demo, portfolio text, UI screenshots
 ```
 
-## Limitations and future work
+`events.csv` is a legacy local artifact, not the current incident source. It is preserved on disk and excluded from Git tracking. PostgreSQL is the source of dashboard records.
 
-- Local MVP with no authentication, role controls, review attribution, or review audit history. Do not expose it publicly as-is. Concurrent reviewers use last-write-wins updates.
-- Tracking IDs are temporary tracks, not worker identities, and may change after re-entry.
-- No screenshots, video capture, browser webcam streaming, or uploads; details explicitly state that evidence is unavailable.
-- API connection status indicates successful database-backed requests, not camera health or detector uptime.
-- Offset pagination can shift when new incidents arrive; timestamp ties use incident ID for deterministic ordering.
-- Aggregates query the existing table without schema/index changes. Larger deployments may need indexes, retention policies, date-range filtering, and cursor pagination.
-- Inference accuracy, model training, and existing MPS optimizations are unchanged and were not validated by the dashboard checks.
-- Future phases: authentication, evidence capture, camera metadata, review audit trails, and operational health reporting.
+## Limitations and deployment boundary
 
-No build output, dependencies, secrets, local databases, or weights should be committed. Phase 5 changes are intentionally left uncommitted for review.
+- Tracking IDs are temporary; occlusion or re-entry may produce a new ID. No identity recognition is implemented.
+- Lighting, small objects, occlusion, camera position, and ambiguous PPE can cause false positives or missed detections. Region-based association can assign one item to overlapping workers.
+- Ten training epochs and one validation split do not establish generalization to a new workplace. No independent field benchmark or end-to-end incident precision/recall was measured.
+- The detector makes synchronous HTTP calls with a three-second timeout. Outages can delay inference, and there is no persistent retry queue. Process-local cooldowns do not deduplicate across restarts or multiple detector processes.
+- There is no video streaming, recording, automatic evidence screenshot storage, camera-health telemetry, or permanent worker identity.
+- Offset pagination can shift as records arrive; larger datasets may need indexing, retention, and cursor pagination.
+- This is a **local portfolio MVP**, not a publicly deployed safety service. Authentication, authorization, TLS, controlled origins, request limits, backups, and operational monitoring are required before exposing incident data publicly. No deployment or complex authentication was added in Phase 6.
 
-Suggested commit: `feat: build React safety monitoring dashboard with incident analytics`
+Secrets, local databases, datasets, recordings, generated builds, dependencies, and model weights are ignored. Earlier Git history was not rewritten; excluding a file now does not remove earlier copies. No commits or pushes were made during Phase 6.

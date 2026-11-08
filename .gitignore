@@ -17,3 +17,20 @@ coverage/
 *.db
 *.sqlite
 *.sqlite3
+
+# Local datasets, recordings, and exported model artifacts
+datasets/
+recordings/
+captures/
+evidence/
+postgres_data/
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.pth
+*.ckpt
+*.onnx
+*.engine
+*.safetensors

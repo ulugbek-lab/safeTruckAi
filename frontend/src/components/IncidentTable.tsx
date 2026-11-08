@@ -3,7 +3,6 @@ import {
   ArrowUpWideNarrow,
   ChevronLeft,
   ChevronRight,
-  ChevronRight as OpenIcon,
   Inbox,
 } from "lucide-react";
 import { PAGE_SIZE } from "../services/api";
@@ -173,7 +172,7 @@ export function IncidentTable({
                     aria-label={`View incident ${incident.id}`}
                     onClick={() => onOpen(incident.id)}
                   >
-                    <OpenIcon size={17} />
+                    <ChevronRight size={17} />
                   </button>
                 </td>
               </tr>

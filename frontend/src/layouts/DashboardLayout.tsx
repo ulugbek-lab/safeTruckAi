@@ -95,7 +95,7 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
             </p>
           </div>
           <span className="version-label">
-            SAFETRUCK AI <span>Phase 05</span>
+            SAFETRUCK AI <span>Local MVP</span>
           </span>
         </div>
       </aside>

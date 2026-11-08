@@ -1,0 +1,152 @@
+{
+  "postgres_initial": {
+    "mode": "pytest on isolated PostgreSQL",
+    "source_before": {
+      "count": 6,
+      "sha256": "b047fe743b0906727229a235e04124b001254d93888d48e10cd2ae3c332079da"
+    },
+    "pytest_exit_code": 0,
+    "read_routes": {
+      "/health": 200,
+      "/api/incidents": 200,
+      "/api/dashboard/incidents": 200,
+      "/api/dashboard/statistics": 200,
+      "/api/dashboard/analytics": 200
+    },
+    "temporary_database_removed": true,
+    "source_after": {
+      "count": 6,
+      "sha256": "b047fe743b0906727229a235e04124b001254d93888d48e10cd2ae3c332079da"
+    },
+    "existing_rows_unchanged": true
+  },
+  "postgres_final_using_container_credentials_in_memory": {
+    "mode": "pytest on isolated PostgreSQL",
+    "source_before": {
+      "count": 6,
+      "sha256": "b047fe743b0906727229a235e04124b001254d93888d48e10cd2ae3c332079da"
+    },
+    "pytest_exit_code": 0,
+    "read_routes": {
+      "/health": 200,
+      "/api/incidents": 200,
+      "/api/dashboard/incidents": 200,
+      "/api/dashboard/statistics": 200,
+      "/api/dashboard/analytics": 200
+    },
+    "temporary_database_removed": true,
+    "source_after": {
+      "count": 6,
+      "sha256": "b047fe743b0906727229a235e04124b001254d93888d48e10cd2ae3c332079da"
+    },
+    "existing_rows_unchanged": true
+  },
+  "disposable_browser_session": {
+    "mode": "isolated demo API",
+    "source_before": {
+      "count": 6,
+      "sha256": "b047fe743b0906727229a235e04124b001254d93888d48e10cd2ae3c332079da"
+    },
+    "temporary_database_removed": true,
+    "source_after": {
+      "count": 6,
+      "sha256": "b047fe743b0906727229a235e04124b001254d93888d48e10cd2ae3c332079da"
+    },
+    "existing_rows_unchanged": true
+  },
+  "detector_http_submission": {
+    "synthetic": true,
+    "target": "disposable PostgreSQL via http://127.0.0.1:8002",
+    "confirmation_frames": 8,
+    "cooldown_suppressed_duplicate": true,
+    "persisted_test_incidents": 2,
+    "browser_review_persisted": true,
+    "pagination_test_incidents": 13
+  },
+  "real_mps_smoke": {
+    "device": "mps",
+    "frames": [
+      {
+        "tracked_person_boxes": 1,
+        "has_tracking_ids": true,
+        "ppe_boxes": 9
+      },
+      {
+        "tracked_person_boxes": 0,
+        "has_tracking_ids": false,
+        "ppe_boxes": 6
+      }
+    ],
+    "passed": true
+  },
+  "camera_probe": {
+    "camera_opened": false,
+    "frame_read": false
+  },
+  "repository_audit": {
+    "scan": "targeted patterns in current tracked and untracked non-ignored candidate files, not a full security audit or history rewrite",
+    "possible_secret_files": [],
+    "tracked_files_over_5MB": [],
+    "protected_content_unchanged": {
+      "models/best.pt": true,
+      "yolo26n.pt": true,
+      "train.py": true,
+      "custom_tracker.yaml": true,
+      "compose.yaml": true,
+      ".env": false,
+      "backend/database.py": true,
+      "events.csv": true
+    },
+    "events_csv_tracked": false
+  },
+  "live_api_read_checks_before_config_edit": {
+    "/health": 200,
+    "/api/incidents": 200,
+    "/api/dashboard/incidents": 200,
+    "/api/dashboard/statistics": 200,
+    "/api/dashboard/analytics": 200,
+    "/api/incidents/1": 200,
+    "/api/incidents/999999999": 404,
+    "/api/dashboard/incidents?status=invalid": 422
+  },
+  "configuration_change": {
+    "env_changed_during_verification": true,
+    "current_url_matches_running_container": false,
+    "current_password_is_example_placeholder": true,
+    "existing_rows": {
+      "count": 6,
+      "sha256": "b047fe743b0906727229a235e04124b001254d93888d48e10cd2ae3c332079da"
+    },
+    "running_api_statistics_status": "ReadTimeout"
+  },
+  "browser_checks": {
+    "initial_loading_and_empty_state": true,
+    "manual_refresh": true,
+    "review_saved_and_api_persistence_confirmed": true,
+    "status_and_type_filters": true,
+    "pagination_10_then_3": true,
+    "oldest_first_resets_page": true,
+    "mobile_document_width_matches_viewport": true,
+    "tablet_document_width_matches_viewport": true,
+    "console_errors_before_deliberate_outage": 0,
+    "deliberate_api_interruption_marked_stale": true,
+    "all_test_writes_target": "newly-created disposable database only"
+  },
+  "final_checks": {
+    "sqlite_tests_passed": 20,
+    "postgres_tests_passed": 20,
+    "typescript_passed": true,
+    "production_build_passed": true,
+    "ml_environment_pip_check": "No broken requirements found",
+    "deployment_performed": false,
+    "commit_or_push_performed": false,
+    "python_syntax_passed": true,
+    "documentation_link_errors": [],
+    "evaluation_cli_help_passed": true
+  },
+  "final_config_preflight": {
+    "exit_code": 2,
+    "configured_database_preflight_passed": false,
+    "message": "Cannot connect to the configured PostgreSQL database. Check DATABASE_URL against the initialized database credentials. No test database was created and existing records were not modified."
+  }
+}

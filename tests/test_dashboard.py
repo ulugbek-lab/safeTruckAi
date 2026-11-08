@@ -14,7 +14,6 @@ import pytest
 import os
 from datetime import datetime, timedelta, timezone
 
-os.environ.setdefault("DATABASE_URL", "sqlite://")
 
 
 @pytest.fixture
