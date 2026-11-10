@@ -7,7 +7,10 @@ import type {
   ReviewStatus,
   Statistics,
 } from "../types/incidents";
+
+import { demoDashboard, demoIncident, demoReview } from "./demo";
 const base = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === "true";
 export const PAGE_SIZE = 10;
 async function request<T>(
   path: string,
@@ -36,6 +39,9 @@ export const api = {
     filters: Filters,
     signal: AbortSignal,
   ): Promise<DashboardData> {
+    if (DEMO_MODE) {
+      return demoDashboard(filters);
+    }
     const params = new URLSearchParams({
       offset: String((filters.page - 1) * PAGE_SIZE),
       limit: String(PAGE_SIZE),
@@ -51,11 +57,16 @@ export const api = {
     return { incidents, statistics, analytics };
   },
   incident: (id: number, signal: AbortSignal) =>
-    request<Incident>(`/incidents/${id}`, signal),
+    DEMO_MODE
+      ? Promise.resolve(demoIncident(id))
+      : request<Incident>(`/incidents/${id}`, signal),
+
   review: (id: number, status: ReviewStatus, signal: AbortSignal) =>
-    request<Incident>(`/incidents/${id}`, signal, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
-    }),
+    DEMO_MODE
+      ? Promise.resolve(demoReview(id, status))
+      : request<Incident>(`/incidents/${id}`, signal, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status }),
+        }),
 };
