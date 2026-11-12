@@ -1,4 +1,3 @@
-
 import type {
   Incident,
   ReviewStatus,
@@ -17,9 +16,7 @@ function initialIncidents(): Incident[] {
     worker_id: 100 + (index % 8),
     violation: violations[index % 2],
     status: index % 4 === 0 ? "reviewed" : "pending",
-    timestamp: new Date(
-      Date.now() - index * 12 * 60 * 60 * 1000
-    ).toISOString(),
+    timestamp: new Date(Date.now() - index * 12 * 60 * 60 * 1000).toISOString(),
   }));
 }
 
@@ -40,16 +37,14 @@ export function demoDashboard(filters: Filters): DashboardData {
   const all = readIncidents();
 
   const filtered = all
-    .filter((item) =>
-      !filters.violation || item.violation === filters.violation
+    .filter(
+      (item) => !filters.violation || item.violation === filters.violation,
     )
-    .filter((item) =>
-      !filters.status || item.status === filters.status
-    )
+    .filter((item) => !filters.status || item.status === filters.status)
     .sort((a, b) =>
       filters.sort === "newest"
         ? b.timestamp.localeCompare(a.timestamp)
-        : a.timestamp.localeCompare(b.timestamp)
+        : a.timestamp.localeCompare(b.timestamp),
     );
 
   const offset = (filters.page - 1) * PAGE_SIZE;
@@ -61,9 +56,7 @@ export function demoDashboard(filters: Filters): DashboardData {
 
     return {
       date: day,
-      count: all.filter((item) =>
-        item.timestamp.startsWith(day)
-      ).length,
+      count: all.filter((item) => item.timestamp.startsWith(day)).length,
     };
   });
 
@@ -100,10 +93,7 @@ export function demoIncident(id: number): Incident {
   return incident;
 }
 
-export function demoReview(
-  id: number,
-  status: ReviewStatus
-): Incident {
+export function demoReview(id: number, status: ReviewStatus): Incident {
   const incidents = readIncidents();
   const incident = incidents.find((item) => item.id === id);
 

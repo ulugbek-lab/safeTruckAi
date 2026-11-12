@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import {
+  BookOpen,
   ArrowUpRight,
   ChartNoAxesCombined,
   ClipboardList,
@@ -9,7 +10,7 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-export function DashboardLayout({ children }: { children: ReactNode }) {
+export function DashboardLayout({ children, currentPage }: { children: ReactNode; currentPage: "overview" | "guide" }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="app-shell">
@@ -60,9 +61,9 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
         <span className="nav-label">WORKSPACE</span>
         <nav>
           <a
-            className="nav-item active"
-            href="#main-content"
-            aria-current="page"
+            className={`nav-item ${currentPage === "overview" ? "active" : ""}`}
+            href="#/overview"
+            aria-current={currentPage === "overview" ? "page" : undefined}
             onClick={() => setOpen(false)}
           >
             <LayoutDashboard size={18} />
@@ -83,6 +84,15 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
           >
             <ChartNoAxesCombined size={18} />
             Analytics
+          </a>
+          <a
+            className={`nav-item ${currentPage === "guide" ? "active" : ""}`}
+            href="#/guide"
+            aria-current={currentPage === "guide" ? "page" : undefined}
+            onClick={() => setOpen(false)}
+          >
+            <BookOpen size={18} />
+            Project Guide
           </a>
         </nav>
         <div className="sidebar-bottom">
@@ -113,7 +123,7 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
             </button>
             <span>Workspace</span>
             <span className="breadcrumb-slash">/</span>
-            <strong>Overview</strong>
+            <strong>{currentPage === "guide" ? "Project Guide" : "Overview"}</strong>
           </div>
           <a
             className="docs-link"
